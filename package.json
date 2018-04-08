@@ -1,0 +1,15 @@
+{
+  "name": "chat_server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Lou Schlessinger",
+  "license": "ISC",
+  "dependencies": {
+    "mime": "^1.3.4",
+    "socket.io": "^1.7.3"
+  }
+}

@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html>
+   <head>
+      <title>Chat Server</title>
+      <meta charset="utf-8"> 
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style type="text/css">
+         * {
+            -webkit-box-sizing: border-box;
+               -moz-box-sizing: border-box;
+                    box-sizing: border-box;
+         }
+
+         .item {
+             position: relative;
+         }
+
+         .item h1, h2, h3, h4, h5, h6, p {
+             padding: 0 1em;
+         }
+
+         nav.item {
+            display: inline-block;
+            vertical-align: top;
+            width: 25%;
+            border: solid black 2px;
+            border-radius: 25px;
+            margin-top: 100px;
+         }
+
+         .column {
+            display: inline-block;
+            vertical-align: top;
+            width: 75%;
+            padding: 0 25px;
+         }
+
+         #container {
+            padding: 1em;
+            margin: 0 0 1em 0;
+            background-color: white;
+         }
+
+         #chatContainer {
+            display: none;
+         }
+
+         #registerUserForm {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 10px;
+         }
+
+         #messageForm {
+            margin-bottom: 10px;
+         }
+         
+         /* source: https://www.w3schools.com/howto/howto_css_loader.asp */
+         .loader {
+             border: 16px solid #f3f3f3; /* Light grey */
+             border-top: 16px solid #3498db; /* Blue */
+             border-radius: 50%;
+             width: 120px;
+             height: 120px;
+             animation: spin 2s linear infinite;
+             margin: 0 auto;
+         }
+
+         @keyframes spin {
+             0% { transform: rotate(0deg); }
+             100% { transform: rotate(360deg); }
+         }
+      </style>
+      <!-- Latest compiled and minified CSS -->
+      <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css">
+
+      <!-- Font Awesome -->
+      <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
+
+      <!-- jQuery library -->
+      <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+
+      <!-- Latest compiled JavaScript -->
+      <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js"></script>
+      <script src="/socket.io/socket.io.js"></script>
+      <script type="text/javascript">
+         $(function() {
+            var socketio = io.connect();
+            var currentUsername;
+            var currentRoom;
+
+            // setup
+            $("#passwordDiv").hide();
+            $("#activeUsers").hide();
+            $("#bannedUsers").hide();
+            $("#chatArea").hide();
+            $("#privateChatArea").hide();
+            $("#userIsTyping").hide();
+            $("#profileDetailsArea").hide();
+
+            $("#registerUserForm").submit(function(event) {
+               event.preventDefault();
+               currentUsername = $("#usernameInput").val();
+               socketio.emit("create_user", { username: currentUsername }, function (data) {
+                  if (data["success"]) {
+                     $("#newUserContent").hide();
+                     $("#chatContainer").show();
+                     $(".usernameSpan").text(currentUsername);
+                     $("#usernameError").text("");
+
+                     // update chat rooms, active users, and banned users
+                     
+                  } else {
+                     $("#usernameError").text(data["message"]);
+                  }
+               });
+               
+            });
+
+            $("#createChatRoomBtn").click(function() {
+               // event.preventDefault();
+               var chatRoomName = $("#chatRoomNameInput").val();
+               var passwordProtected = $("#passwordCheckbox").is(":checked");
+               var password = $("#inputPassword").val();
+               console.log("emitting " + password + ", " + passwordProtected);
+               socketio.emit("create_chat_room", { name: chatRoomName, password_protected: passwordProtected, password: password }, function(data) {
+                  if (data["success"]) {
+                     // create alert, 
+                     $('#createRoomModal').modal('toggle');
+
+                     $("#activeUsers").show();
+                     $("#bannedUsers").show();
+                     $("#chatlog").empty();
+                     currentRoom = data["room_id"];
+                     $("#chatArea").show();
+                  } else {
+                     $("#createChatRoomError").text(data["message"]);
+                  }
+               });
+            })
+
+            $("#sendMessageBtn").click(function(event) {
+               var messageContent = $("#message_input").val();
+               sendMessage(messageContent);
+            });
+
+            $('#message_input').keypress(function(e){
+               if (e.keyCode == 13) {
+                  $('#sendMessageBtn').click();
+               } else {
+                   socketio.emit("client_user_typing", { username: currentUsername, room_id: currentRoom } );
+               }
+               });
+
+            $("#passwordCheckbox").change(function() {
+               if (this.checked) {
+                  $("#passwordDiv").slideDown("slow");
+                  $('#inputPassword').prop('required',true);
+               } else {
+                  $("#passwordDiv").slideUp("up");
+                  $('#inputPassword').removeAttr('required');
+               }
+            });
+
+            $('#enterRoomPasswordModal').on('show.bs.modal', function(e) {
+               var roomId = $(e.relatedTarget).data('room-id');
+               $(e.currentTarget).find('input[name="roomId"]').val(roomId);
+               $("#verifyRoomPasswordBtn").click( function() {
+                  var passwordGuess = $("#inputVerifyPassword").val();
+                  console.log("joining room with pass: "+passwordGuess +" and roomId = "+roomId);
+                  joinRoomWithPass(roomId, passwordGuess);
+               });
+            });
+
+            $('#banUserModal').on('show.bs.modal', function(e) {
+               var roomId = $(e.relatedTarget).data('room-id');
+               var userId = $(e.relatedTarget).data('user-id');
+               $(e.currentTarget).find('input[name="roomId"]').val(roomId);
+               $(e.currentTarget).find('input[name="userId"]').val(userId);
+               $("#confirmBanUserBtn").click( function() {
+                  console.log("banning user with user ID: "+userId +" and roomId = "+roomId);
+                  banUser(userId, roomId);
+               });
+            });
+
+            $('#privateMessageModal').on('show.bs.modal', function(e) {
+               var roomId = $(e.relatedTarget).data('room-id');
+               var toUserId = $(e.relatedTarget).data('user-id');
+               $(e.currentTarget).find('input[name="roomId"]').val(roomId);
+               $(e.currentTarget).find('input[name="userId"]').val(toUserId);
+               $("#sendPrivateMessageBtn").click( function() {
+                  console.log("sending private message with user ID: " + toUserId +" and roomId = "+roomId);
+                  var messageContent = $("#inputPrivateMessage").val();
+                  $('#privateMessageModal').modal('toggle');
+                  sendMessage(messageContent, true, toUserId);
+
+               });
+            });
+
+            $("#privateMessagesItem").click(function() {
+               $(this).addClass('active');
+               $("#groupMessagesItem").removeClass('active');
+               $("#profileItem").removeClass('active');
+               $("#chatArea").hide();
+               $("#privateChatArea").show();
+               $("#profileDetailsArea").hide();
+            });
+
+            $("#groupMessagesItem").click(function() {
+               $(this).addClass('active');
+               $("#privateMessagesItem").removeClass('active');
+               $("#profileItem").removeClass('active');
+               $("#chatArea").show();
+               $("#privateChatArea").hide();
+               $("#profileDetailsArea").hide();
+            });
+
+            $("#profileItem").click(function() {
+               $(this).addClass('active');
+               $("#privateMessagesItem").removeClass('active');
+               $("#groupMessagesItem").removeClass('active');
+               $("#chatArea").hide();
+               $("#privateChatArea").hide();
+               
+               $(".loader").show();
+
+               socketio.emit("request_user_info");
+            });
+
+            socketio.on('recieved_user_info', function(data) {
+               console.log(data);
+
+               var createdRooms = data["created_rooms"];
+               var bannedRooms = data["banned_rooms"];
+               var id = data["id"];
+               var username = data["username"];
+               var numMessagesSent = data["num_messages_sent"];
+
+               $("#createdRoomList").empty();
+               $("#bannedRoomList").empty();
+
+               if (createdRooms.length === 0) {
+                  var $li = $('<li/>', { 'class': 'list-group-item', text: "No created rooms" } );
+                  $("#createdRoomList").append($li);
+               } else {
+                  for (var i = 0; i < createdRooms.length; i++) {
+                     var roomName = createdRooms[i];
+                     var $li = $('<li/>', { 'class': 'list-group-item', text: roomName } );
+                     $("#createdRoomList").append($li);
+                  }
+               }
+
+               if (bannedRooms.length === 0) {
+                  var $li = $('<li/>', { 'class': 'list-group-item', text: "Not banned from any rooms" } );
+                  $("#bannedRoomList").append($li);
+               } else {
+                  for (var i = 0; i < bannedRooms.length; i++) {
+                     var roomName = bannedRooms[i];
+                     var $li = $('<li/>', { 'class': 'list-group-item', text: roomName } );
+                     $("#bannedRoomList").append($li);
+                  }
+               }
+
+               $("#numMesssagesSent").text("Messages sent: " + numMessagesSent);
+               $("#profileId").text("Profile ID: " + id);
+               $("#profileUsername").text("Profile Username: " + username);
+
+               $(".loader").hide();
+               $("#profileDetailsArea").show();
+              
+            });
+
+            socketio.on("message_to_client", function(data) {             
+               updateChatMessages(data);
+               $('#groupMessagesItem').click();
+            });
+
+            socketio.on("private_message_to_client", function(data) {             
+               updatePrivateMessages(data);
+               $('#privateMessagesItem').click();
+            });
+
+            socketio.on("update_chat_rooms", function(data) {
+               console.log("updating chat rooms");
+               updateChatRooms(data);
+            });
+
+            socketio.on("update_active_users", function(data) {
+               console.log("updating active users");
+               updateActiveUsers(data);
+            });
+
+            socketio.on("update_banned_users", function(data) {
+               console.log("updating banned users");
+               updateBannedUsers(data);
+            });
+
+            socketio.on("server_user_typing", function(data) {
+               var username = data["username"];
+               if (username === currentUsername) return;
+               $("#userIsTyping").slideDown("slow");
+               $("#userIsTyping").text(username + " is typing...");
+               setTimeout(function() {
+                  $("#userIsTyping").slideUp("slow");
+               }, 2500);
+            });
+
+            socketio.on("user_banned", function(data) {
+               var room = data["room"];
+               // hide active users and banned users
+               $("#activeUsers").hide();
+               $("#bannedUsers").hide();
+               $("#chatArea").hide();
+               currentRoom = "";
+            });
+
+            function joinRoom(room) {
+               socketio.emit("join_chat_room", { room_id: room.id }, function(data) {
+                  if (data["success"]) {
+                     // $("#currentChatRoomText").text("You are currently in chat room " + room.name);
+                     // setRoomActive(room);
+                     $("#activeUsers").show();
+                     $("#bannedUsers").show();
+                     $("#chatArea").show();
+                     $("#chatlog").empty();
+                     currentRoom = room.id;
+                  } else {
+                     alert(data["message"]);
+                     console.log(data["message"]);
+                  }
+               });
+            }
+
+            function joinRoomWithPass(roomId, passwordGuess) {
+               socketio.emit("join_chat_room", { room_id: roomId, password: passwordGuess }, function(data) {
+                  if (data["success"]) {
+                     $('#enterRoomPasswordModal').modal('toggle');
+                     currentRoom = roomId;
+                     $("#chatArea").show();
+                     $("#chatlog").empty();
+                  } else {
+                     console.log(data["message"]);
+                     $("#enterPasswordChatRoomError").text(data["message"]);
+                  }
+               });
+            }
+
+            function kickUser(user, room) {
+               socketio.emit("kick_user", { room_id: room.id, user_id: user.id } );
+            }
+
+            function banUser(userId, roomId) {
+               socketio.emit("ban_user", { room_id: roomId, user_id: userId }, function(data) {
+                   if (data["success"]) {
+                     $('#banUserModal').modal('toggle');
+                  } else {
+                     console.log(data["message"]);
+                     $("#banUserError").text(data["message"]);
+                  }
+               });
+            }
+
+            function sendMessage(messageContent, isPrivate, toUserId) {
+               var now = new Date();
+               var sentAt = getTime(now);
+               if (isPrivate) {
+                  sendPrivateMessage(messageContent, sentAt, toUserId);
+               } else {
+                  sendPublicMessage(messageContent, sentAt);
+               }
+            }
+
+            function sendPublicMessage(messageContent, sentAt) {
+               socketio.emit("message_to_server", { room: currentRoom, message: messageContent, sent_at: sentAt } );
+            }
+
+            function sendPrivateMessage(messageContent, sentAt, toUserId) {
+               socketio.emit("private_message_to_server", { room: currentRoom, message: messageContent, sent_at: sentAt, to_user_id: toUserId } );
+            }
+
+            function getTime(date) {
+               var minutes = date.getMinutes();
+               var hours = date.getHours();
+
+               var suffix = hours >= 12 ? "pm":"am";
+               hours = ((hours + 11) % 12 + 1);
+               return hours + ":" + minutes + suffix;
+            }
+
+            function updateChatRooms(data) {
+               var chatRooms = data["rooms"];
+               console.log("chatRooms");
+               console.log(chatRooms);
+               if (chatRooms.length == 0) {
+                  $("#no-active-rooms").show();
+                  return;
+               } else {
+                   $("#no-active-rooms").hide();
+                   $('#chatRoomList').find('*').not('#no-active-rooms').remove();
+               }
+
+               for (var i = 0; i < chatRooms.length; i++) {
+                  var room = chatRooms[i];
+                  var numUsers = parseInt(room.users.length);
+                  var activeUserText =  numUsers === 1 ? numUsers + " active user" : numUsers + " active users";
+
+                  var linkExists = $('chatRoomList li a').filter(function(index) { return $(this).text() === room.name; });
+                  if ($("#chatRoomList li a:contains(" + room.name + ")").length === 0) {
+
+                     var $roomList = $("#chatRoomList");
+                     var $li = $('<li/>', { 'class': 'list-group-item' } );
+                     var $a = $('<a/>', { 'href': '#', text: room.name } );
+                     var $span =  $('<span/>', { 'class': 'badge', text: activeUserText } );
+
+                     if (room.owner.username === currentUsername) {
+                        $a.css("font-weight", "bold");
+                     }
+
+                     if (room.passwordProtected) {
+                        $lockIcon = $('<span/>', { 'class': 'fa fa-lock', 'aria-hidden': 'true' } );
+                        $lockIcon.css("margin-right", "5px");
+                        $li.append( $lockIcon );
+
+                        $a.attr( { "aria-label": "Enter room password", "data-toggle": "modal", "data-target": "#enterRoomPasswordModal", 
+                           "data-room-id": room.id} );
+                     }
+
+                     if (userInRoom(room, currentUsername)) {
+                        // change this
+                        $li.addClass("active");
+                        $a.css("color", "white");
+                        $("#currentChatRoomText").text("You are currently in chat room " + room.name);
+                        
+                     } else {
+                        if (!room.passwordProtected) {
+                           $a.click(createJoinCallback(room));
+                        }
+                     }
+
+                     $roomList.append(
+                        $li.append(
+                           $a
+                        ).append(
+                           $span
+                        )
+                     );
+
+                  } else {
+                     // still need to update num active user span
+                     var $listItem = $('chatRoomList li').filter(function(index) { return $(this).text() === room.name; });
+                     $listItem.find("span").text(activeUserText);
+                  }
+               }
+            }
+
+            function updateActiveUsers(data) {
+               var room = data["room"];
+               $('#activeUsersList').find('*').not('#no-active-users').remove();
+               // if empty, show no active users
+               if (room.users.length == 0) {
+                  $("#no-active-users").show();
+                  return;
+               } else {
+                  $("#no-active-users").hide();
+                  
+               }
+
+               console.log("received data for room:");
+               console.log(room);
+               var owner = room.owner;
+               for (var i = 0; i < room.users.length; i++) {
+                  var user = room.users[i];
+                  var username = user.username;
+
+                  var $userList =  $("#activeUsersList");
+                  var $li = $('<li/>', { 'class': 'list-group-item clearfix' } );
+                  var $userSpan = $('<span/>', { 'class': 'userSpan', text: username } );
+
+                  var $rightBtnSpan = $('<span/>', { 'class': 'pull-right' } );
+
+                  var $banUserBtn = $('<button/>', { 'type': 'button', 'class': 'btn btn-default btn-sm', 'aria-label': 'Ban', 'data-toggle': 'modal', 'data-target': '#banUserModal' } );
+                  var $banUserIconSpan = $('<span/>', { 'class': 'fa fa-ban', 'aria-hidden': 'true' } );
+
+                  var $sendPMBtn = $('<button/>', { 'type': 'button', 'class': 'btn btn-default btn-sm', 'aria-label': 'Send private message', 'data-toggle': 'modal',
+                   'data-target': '#privateMessageModal'  } );
+                  var $sendPMIconSpan = $('<span/>', { 'class': 'fa fa-envelope', 'aria-hidden': 'true' } );
+
+                  var $kickBtn = $('<button/>', { 'type': 'button', 'class': 'btn btn-default btn-sm', 'aria-label': 'Kick out' } );
+                  var $kickIconSpan = $('<span/>', { 'class': 'fa fa-remove', 'aria-hidden': 'true' } );
+
+                  if (username === currentUsername) { 
+                     // if it's current user: only show username
+                     $userList.append(
+                        $li.append(
+                           $userSpan
+                        )
+                     );
+                  } else if (username !== currentUsername && currentUsername === owner.username) {
+                     // else if it's the owner: show username, PM, Kick, Ban
+                     $userList.append(
+                        $li.append(
+                           $userSpan
+                        ).append(
+                           $rightBtnSpan.append(
+                              $banUserBtn.append(
+                                 $banUserIconSpan
+                              )
+                           ).append(
+                              $sendPMBtn.append(
+                                 $sendPMIconSpan
+                              )
+                           ).append(
+                              $kickBtn .append(
+                                 $kickIconSpan
+                              )
+                           )
+                        )
+                     );
+                  } else {
+                     // else: show PM
+                     $userList.append(
+                        $li.append(
+                           $userSpan
+                        ).append(
+                           $rightBtnSpan.append(
+                              $sendPMBtn.append(
+                                 $sendPMIconSpan
+                              )
+                           )
+                        )
+                     );
+                  }
+                  $banUserBtn.attr( { "data-room-id": room.id, "data-user-id": user.id } );
+                  $sendPMBtn.attr( { "data-room-id": currentRoom, "data-user-id": user.id } );
+                  $kickBtn.click(createKickCallback(user, room));
+               }
+            }
+
+            function updateBannedUsers(data) {
+               var room = data["room"];
+               console.log(room.bannedUsers);
+               $('#bannedUsersList').find('*').not('#no-banned-users').remove();
+               // if empty, show no banned users
+               if (room.bannedUsers.length == 0) {
+                  $("#no-banned-users").show();
+                  return;
+               } else {
+                  $("#no-banned-users").hide();
+                  
+               }
+
+               var owner = room.owner;
+               for (var i = 0; i < room.bannedUsers.length; i++) {
+                  var user = room.bannedUsers[i];
+                  var username = user.username;
+                  $("#bannedUsersList").append(
+                     $('<li/>', {'class': 'list-group-item', text: username } )
+                  );
+               }
+            }
+
+            function updateChatMessages(data) {
+               var chatHistory = data["chat_history"];
+               $("#chatlog").empty();
+               for (var i = 0; i < chatHistory.length; i++) {
+                  var message = chatHistory[i];
+                  var messageContent = message.text;
+                  var sender = message.user.username;
+                  var sent_at = message.sentAt;
+
+                  $("#chatlog").append(
+                      $('<div/>', { 'class': 'panel' } ).append(
+                          $('<div/>', { 'class': 'panel-body' } ).append(
+                              $('<span/>', { 'data-toggle': 'tooltip', "title": sent_at } ).append(
+                                 $('<strong/>', { text: sender + ": " } )
+                              ).append(messageContent)
+                          )
+                      )
+                  );
+               }
+            }
+
+            function updatePrivateMessages(data) {
+               var chatHistory = data["chat_history"];
+               $("#privateChatlog").empty();
+               for (var i = 0; i < chatHistory.length; i++) {
+                  var message = chatHistory[i];
+                  var messageContent = message.text;
+                  var sender = message.user.username;
+                  var sent_at = message.sentAt;
+
+                  $("#privateChatlog").append(
+                      $('<div/>', { 'class': 'panel' } ).append(
+                          $('<div/>', { 'class': 'panel-body' } ).append(
+                              $('<span/>', { 'data-toggle': 'tooltip', "title": sent_at } ).append(
+                                 $('<strong/>', { text: sender + ": " } )
+                              ).append(messageContent)
+                          )
+                      )
+                  );
+               }
+            }
+
+            function setRoomActive(room) {
+               $("#currentChatRoomText").text("You are currently in chat room " + room.name);
+
+               var $li = $("#chatRoomList li:contains(" + room.name + ")");
+               $li.toggleClass('active');
+               var $link = $("#chatRoomList li a:contains(" + room.name + ")");
+               $link.css('color', 'white');
+            }
+
+            function createJoinCallback( room ){
+               return function() {
+                  joinRoom(room);
+               }
+            } 
+
+            function createKickCallback( user, room ){
+               return function() {
+                  kickUser(user, room);
+               }
+            } 
+
+            // helpers
+            function userInRoom(room, username) {
+               return typeof find(room.users, username) !== "undefined";
+            }
+
+            function find(array, key) {
+                for (var i = 0; i < array.length; i++) {
+                    if (array[i].username === key) {
+                        return array[i];
+                    }
+                }
+            }
+         });
+      </script>
+   </head>
+   <body>
+      <!-- BEGIN MODALS-->
+      <!-- Create chat room modal -->
+      <div id="createRoomModal" class="modal fade" role="dialog">
+        <div class="modal-dialog">
+          <!-- Modal content-->
+          <div class="modal-content">
+            <div class="modal-header">
+              <button type="button" class="close" data-dismiss="modal">&times;</button>
+              <h4 class="modal-title">Create Room</h4>
+            </div>            
+            <div class="modal-body">
+              <p>Enter a name for your chat room.</p>
+              <p class="text-danger" id="createChatRoomError"></p>
+              <form id="createRoomForm">
+                  <div class="form-group">
+                     <label for="chatRoomNameInput">Name:</label>
+                     <input name="chatRoom" type="text" class="form-control" id="chatRoomNameInput" placeholder="Chat room name" maxlength="50" required="">
+                  </div>
+                  <div class="checkbox">
+                     <label><input id="passwordCheckbox" type="checkbox" value="">Password protected</label>
+                  </div>
+                  <div id="passwordDiv" class="form-group">
+                     <label for="inputPassword">Password:</label>
+                     <input id="inputPassword" class="form-control" type="password" name="password" placeholder="Password" maxlength="50">
+                  </div>
+              </form>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+              <button id="createChatRoomBtn" type="button" class="btn btn-primary">Create Room</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ban user modal -->
+      <div id="banUserModal" class="modal fade" role="dialog">
+        <div class="modal-dialog">
+          <!-- Modal content-->
+          <div class="modal-content">
+            <div class="modal-header">
+              <button type="button" class="close" data-dismiss="modal">&times;</button>
+              <h4 class="modal-title">Ban User</h4>
+            </div>            
+            <div class="modal-body">
+               <p>Are you sure you would like to permanently ban <span id="userToBan"></span>?</p>
+               <p class="text-danger" id="banUserError"></p>
+               <form id="banUserForm">
+                  <input type="hidden" name="roomId" value=""/>
+                  <input type="hidden" name="userId" value=""/>
+               </form>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+              <button id="confirmBanUserBtn" type="button" class="btn btn-danger">Ban</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- private message modal -->
+      <div id="privateMessageModal" class="modal fade" role="dialog">
+        <div class="modal-dialog">
+          <!-- Modal content-->
+          <div class="modal-content">
+            <div class="modal-header">
+              <button type="button" class="close" data-dismiss="modal">&times;</button>
+              <h4 class="modal-title">Private Message</h4>
+            </div>            
+            <div class="modal-body">
+               <p>Enter a private message:</p>
+               <p class="text-danger" id="privateMessageError"></p>
+               <form id="privateMessageForm">
+                  <div class="form-group">
+                     <label for="inputPrivateMessage">Message:</label>
+                     <input id="inputPrivateMessage" class="form-control" type="text" name="message" placeholder="Private message" minlength="1">
+                  </div>
+                  <input type="hidden" name="roomId" value=""/>
+                  <input type="hidden" name="userId" value=""/>
+               </form>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+              <button id="sendPrivateMessageBtn" type="button" class="btn btn-primary">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Enter chat room password modal -->
+      <div id="enterRoomPasswordModal" class="modal fade" role="dialog">
+        <div class="modal-dialog">
+          <!-- Modal content-->
+          <div class="modal-content">
+            <div class="modal-header">
+              <button type="button" class="close" data-dismiss="modal">&times;</button>
+              <h4 class="modal-title">Enter Password</h4>
+            </div>            
+            <div class="modal-body">
+              <p>Enter the password for the chat room.</p>
+              <p class="text-danger" id="enterPasswordChatRoomError"></p>
+              <form id="enterRoomPasswordForm">
+                  <div class="form-group">
+                     <label for="inputVerifyPassword">Password:</label>
+                     <input id="inputVerifyPassword" class="form-control" type="password" name="password" placeholder="Password" maxlength="50">
+                  </div>
+                  <input type="hidden" name="roomId" value=""/>
+              </form>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+              <button id="verifyRoomPasswordBtn" type="button" class="btn btn-primary">Join Room</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- END MODALS-->
+
+      <div class="container">
+         
+         <div id="newUserContent" >
+            <div id="header">
+               <h1 class="text-center"> Multi-room Chat Server</h1>
+            </div>
+            <form id="registerUserForm">
+               <div class="form-group">
+                  <p class="text-danger" id="usernameError"></p>
+                  <label for="usernameInput">Username</label>
+                  <input type="text" name="username" id="usernameInput" class="form-control" placeholder="Enter username" required="" maxlength="36">
+                  <span class="help-block">This is the name that will display to other users.</span>
+               </div>
+               <div class="form-group">        
+                    <button type="submit" class="btn btn-primary">Enter Chat Server</button>
+                </div>
+            </form>
+         </div>
+
+         <div id="chatContainer" class="container item">
+            <nav class="item">
+               <h4>Active Chat Rooms 
+                  <button type="button" class="btn btn-default btn-sm pull-right" aria-label="Create chat room" data-toggle="modal" data-target="#createRoomModal">
+                    <span class="fa fa-plus" aria-hidden="true"></span>
+                  </button>
+               </h4> 
+
+               <p class="small">Please click a room to join it</p>
+               <ul id="chatRoomList" class="list-group">
+                  <li id="no-active-rooms" class="list-group-item">No active chat rooms</li>
+               </ul>
+
+               <div id="activeUsers">
+                  <h4>Active Users</h4>
+                  <ul id="activeUsersList" class="list-group">
+                     <li id="no-active-users" class="list-group-item">No active users</li>
+                  </ul>
+               </div>
+
+               <div id="bannedUsers">
+                  <h4>Banned Users</h4>
+                  <ul id="bannedUsersList" class="list-group">
+                     <li id="no-banned-users" class="list-group-item">No banned users</li>
+                  </ul>
+               </div>
+            </nav><div class="item column">
+
+            <section class="item">
+               <nav class="navbar navbar-default">
+                 <div class="container-fluid">
+                   <div class="navbar-header">
+                     <a class="navbar-brand" href="#">Multi-room Chat Server</a>
+                   </div>
+                   <ul class="nav navbar-nav">
+                     <li id="groupMessagesItem" class="active"><a href="#">Group Messages</a></li>
+                     <li id="privateMessagesItem"><a href="#">Private Messages</a></li>
+                     <li id="profileItem"><a href="#">View Profile</a></li>
+                   </ul>
+                 </div>
+               </nav>
+               <h3>Hello, <span class="usernameSpan"></span>!</h3>
+            </section>
+
+            <section class="item">
+               <p id="currentChatRoomText">Please join or create a chat room.</p>
+               <p id="userIsTyping" class="text-info small"></p>
+               <div id="chatArea">
+                  <form id="messageForm" class="form-inline">
+                     <input placeholder="Enter a message" class="form-control" type="text" id="message_input" minlength="1" />
+                     <button type="button" class="btn btn-primary" id="sendMessageBtn">Send message</button>
+                  </form>
+                  <div id="chatlog"></div>
+               </div>
+               <div id="privateChatArea">
+                  <div id="privateChatlog"></div>
+               </div>
+               <div id="profileDetailsArea">
+                  <div class="loader"></div>
+
+                     <h4>Created Rooms</h4>
+                     <ul id="createdRoomList" class="list-group">
+                     </ul>
+                     <h4>Banned From Rooms</h4>
+                     <ul id="bannedRoomList" class="list-group">
+                     </ul>
+                     <p id="numMesssagesSent"></p>
+                     <p id="profileId"></p>
+                     <p id="profileUsername"></p>
+                  </div>
+            </section>
+            
+            </div>
+         </div>
+      </div>
+   </body>
+</html>
